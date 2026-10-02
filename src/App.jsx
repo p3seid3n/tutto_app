@@ -1,14 +1,26 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-const TARGET = 6000; // first to reach this wins
+const DEFAULT_TARGET = 6000;
+const MIN_TARGET = 500;
+const MAX_TARGET = 100000;
+const STEP = 500;
+const PRESETS = [2000, 4000, 6000, 10000];
 const HUES = [265, 170, 330, 30, 210, 95, 290, 5];
 const MAX_PLAYERS = HUES.length;
-const SHEET_H = 480;
+const SHEET_H = 520;
 const PEEK = 100;
 const HIDDEN = SHEET_H - PEEK;
 
+const load = (k, d) => {
+  try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; }
+};
+const save = (k, v) => {
+  try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ }
+};
+
 const I = {
   add: "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z",
+  rem: "M19 13H5v-2h14v2z",
   close: "M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z",
   back: "M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z",
   next: "M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z",
@@ -46,10 +58,11 @@ function useCountUp(target) {
 }
 
 /* ───────────── Home ───────────── */
-function Home({ players, setPlayers, onStart }) {
+function Home({ players, setPlayers, target, setTarget, onStart }) {
   const [name, setName] = useState("");
   const [leaving, setLeaving] = useState(null);
   const full = players.length >= MAX_PLAYERS;
+  const bump = (d) => setTarget((t) => Math.min(MAX_TARGET, Math.max(MIN_TARGET, t + d)));
 
   const add = (e) => {
     e.preventDefault();
@@ -80,6 +93,22 @@ function Home({ players, setPlayers, onStart }) {
         </button>
       </form>
 
+      <div className="goal">
+        <div className="goal-row">
+          <span>Points to win</span>
+          <button className="step" onClick={() => bump(-STEP)} aria-label="Less points"><Icon d={I.rem} /></button>
+          <b className="goal-v" key={target}>{target.toLocaleString()}</b>
+          <button className="step" onClick={() => bump(STEP)} aria-label="More points"><Icon d={I.add} /></button>
+        </div>
+        <div className="presets">
+          {PRESETS.map((v) => (
+            <button key={v} className={`preset ${v === target ? "on" : ""}`} onClick={() => setTarget(v)}>
+              {v / 1000}k
+            </button>
+          ))}
+        </div>
+      </div>
+
       <ul className="chips">
         {players.length === 0 && <li className="empty">No players yet</li>}
         {players.map((p) => (
@@ -101,7 +130,7 @@ function Home({ players, setPlayers, onStart }) {
 }
 
 /* ───────────── Ranking ───────────── */
-function Row({ p, rank, current, setRef }) {
+function Row({ p, rank, current, target, setRef }) {
   const card = useRef();
   const first = useRef(true);
   const shown = useCountUp(p.points);
@@ -119,7 +148,9 @@ function Row({ p, rank, current, setRef }) {
         <Avatar p={p} />
         <div className="info">
           <div className="line"><b>{p.name}</b>{current && <em>Turn</em>}</div>
-          <div className="track"><div className="fill" style={{ width: `${Math.min(100, (p.points / TARGET) * 100)}%` }} /></div>
+          <div className="track">
+            <div className="fill" style={{ width: `${Math.max(0, Math.min(100, (p.points / target) * 100))}%` }} />
+          </div>
         </div>
         <span className="pts">{shown.toLocaleString()}</span>
       </div>
@@ -127,7 +158,7 @@ function Row({ p, rank, current, setRef }) {
   );
 }
 
-function Ranking({ players, turnId }) {
+function Ranking({ players, turnId, target }) {
   const sorted = [...players].sort((a, b) => b.points - a.points);
   const refs = useRef({});
   const prev = useRef({});
@@ -152,7 +183,7 @@ function Ranking({ players, turnId }) {
   return (
     <ul className="list">
       {sorted.map((p, i) => (
-        <Row key={p.id} p={p} rank={i + 1} current={p.id === turnId}
+        <Row key={p.id} p={p} rank={i + 1} current={p.id === turnId} target={target}
           setRef={(el) => (refs.current[p.id] = el)} />
       ))}
     </ul>
@@ -162,11 +193,12 @@ function Ranking({ players, turnId }) {
 /* ───────────── Game ───────────── */
 const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "00", "0", "del"];
 
-function Game({ initial, onHome, onRematch }) {
+function Game({ initial, target, onHome, onRematch }) {
   const [players, setPlayers] = useState(() => initial.map((p) => ({ ...p, points: 0 })));
   const [turn, setTurn] = useState(0);
   const [round, setRound] = useState(1);
   const [input, setInput] = useState("");
+  const [neg, setNeg] = useState(false);
   const [open, setOpen] = useState(true);
   const [drag, setDrag] = useState(null);
   const [winner, setWinner] = useState(null);
@@ -174,12 +206,13 @@ function Game({ initial, onHome, onRematch }) {
   const gest = useRef(null);
   const cur = players[turn];
   const value = parseInt(input || "0", 10);
+  const delta = neg ? -value : value;
 
   useEffect(() => {
     if (done || winner) return;
-    const w = players.find((p) => p.points >= TARGET);
+    const w = players.find((p) => p.points >= target);
     if (w) setWinner(w);
-  }, [players, done, winner]);
+  }, [players, done, winner, target]);
 
   const press = (k) => {
     navigator.vibrate?.(8);
@@ -189,14 +222,17 @@ function Game({ initial, onHome, onRematch }) {
       return n.length > 5 ? s : n;
     });
   };
+  const setSign = (n) => { if (n !== neg) navigator.vibrate?.(10); setNeg(n); };
   const bank = () => {
-    setPlayers((ps) => ps.map((p, i) => (i === turn ? { ...p, points: p.points + value } : p)));
+    setPlayers((ps) => ps.map((p, i) => (i === turn ? { ...p, points: p.points + delta } : p)));
     setInput("");
+    setNeg(false);
   };
   const add = () => { if (value) { navigator.vibrate?.(15); bank(); } };
   const next = () => {
     if (value) bank();
     setInput("");
+    setNeg(false);
     setTurn((t) => {
       if (t + 1 === players.length) setRound((r) => r + 1);
       return (t + 1) % players.length;
@@ -233,10 +269,10 @@ function Game({ initial, onHome, onRematch }) {
           <button className="icon-btn" onClick={onHome} aria-label="Back to menu"><Icon d={I.back} /></button>
           <div>
             <h2>Ranking</h2>
-            <span>Round {round} · first to {TARGET.toLocaleString()}</span>
+            <span>Round {round} · first to {target.toLocaleString()}</span>
           </div>
         </header>
-        <Ranking players={players} turnId={cur.id} />
+        <Ranking players={players} turnId={cur.id} target={target} />
       </div>
 
       <section className="sheet" style={{
@@ -248,8 +284,16 @@ function Game({ initial, onHome, onRematch }) {
           <div className="turn" key={cur.id}>
             <Avatar p={cur} size={44} />
             <div className="who"><b>{cur.name}</b><span>{cur.points.toLocaleString()} pts</span></div>
-            <div className={`pending ${value ? "" : "zero"}`} key={input}>+{value.toLocaleString()}</div>
+            <div className={`pending ${value ? "" : "zero"} ${neg ? "neg" : ""}`} key={input + (neg ? "n" : "p")}>
+              {neg ? "−" : "+"}{value.toLocaleString()}
+            </div>
           </div>
+        </div>
+
+        <div className={`seg ${neg ? "neg" : ""}`}>
+          <i className="ind" />
+          <button onClick={() => setSign(false)} className={!neg ? "on" : ""}><Icon d={I.add} size={18} /> Add</button>
+          <button onClick={() => setSign(true)} className={neg ? "on" : ""}><Icon d={I.rem} size={18} /> Subtract</button>
         </div>
 
         <div className="pad">
@@ -263,7 +307,9 @@ function Game({ initial, onHome, onRematch }) {
 
         <div className="actions">
           <button className="btn tonal" onClick={next}>Next <Icon d={I.next} /></button>
-          <button className="btn filled" onClick={add} disabled={!value}><Icon d={I.add} /> Add</button>
+          <button className={`btn filled ${neg ? "neg" : ""}`} onClick={add} disabled={!value}>
+            <Icon d={neg ? I.rem : I.add} /> {neg ? "Subtract" : "Add"}
+          </button>
         </div>
       </section>
 
@@ -286,16 +332,23 @@ function Game({ initial, onHome, onRematch }) {
 
 /* ───────────── App ───────────── */
 export default function App() {
-  const [players, setPlayers] = useState([]);
+  const [players, setPlayers] = useState(() => load("tutto:players", []));
+  const [target, setTarget] = useState(() => load("tutto:target", DEFAULT_TARGET));
   const [game, setGame] = useState(0); // 0 = home, otherwise remount key
+
+  useEffect(() => save("tutto:players", players), [players]);
+  useEffect(() => save("tutto:target", target), [target]);
+
   return (
     <>
       <style>{CSS}</style>
       <div className="app">
         {game === 0 ? (
-          <Home players={players} setPlayers={setPlayers} onStart={() => setGame(1)} />
+          <Home players={players} setPlayers={setPlayers} target={target} setTarget={setTarget}
+            onStart={() => setGame(1)} />
         ) : (
-          <Game key={game} initial={players} onHome={() => setGame(0)} onRematch={() => setGame((g) => g + 1)} />
+          <Game key={game} initial={players} target={target}
+            onHome={() => setGame(0)} onRematch={() => setGame((g) => g + 1)} />
         )}
       </div>
     </>
@@ -307,6 +360,7 @@ const CSS = `
 :root{
   --primary:#6750A4;--on-primary:#fff;--primary-c:#EADDFF;--on-primary-c:#21005D;
   --secondary-c:#E8DEF8;--on-secondary-c:#1D192B;--tertiary-c:#FFD8E4;--on-tertiary-c:#31111D;
+  --error:#B3261E;--on-error:#fff;--error-c:#F9DEDC;--on-error-c:#410E0B;
   --surface:#FEF7FF;--surface-c:#F3EDF7;--surface-ch:#ECE6F0;--surface-chh:#E6E0E9;
   --on-surface:#1D1B20;--on-surface-v:#49454F;--outline-v:#CAC4D0;
   --spring:cubic-bezier(.34,1.56,.64,1);
@@ -314,6 +368,7 @@ const CSS = `
 @media (prefers-color-scheme:dark){:root{
   --primary:#D0BCFF;--on-primary:#381E72;--primary-c:#4F378B;--on-primary-c:#EADDFF;
   --secondary-c:#4A4458;--on-secondary-c:#E8DEF8;--tertiary-c:#633B48;--on-tertiary-c:#FFD8E4;
+  --error:#F2B8B5;--on-error:#601410;--error-c:#8C1D18;--on-error-c:#F9DEDC;
   --surface:#141218;--surface-c:#211F26;--surface-ch:#2B2930;--surface-chh:#36343B;
   --on-surface:#E6E0E9;--on-surface-v:#CAC4D0;--outline-v:#49454F;
 }}
@@ -334,14 +389,14 @@ button{border:0;cursor:pointer;user-select:none}
 @keyframes wobble{0%,100%{transform:rotate(-6deg)}50%{transform:rotate(6deg) scale(1.06)}}
 .avatar{display:grid;place-items:center;border-radius:36%;font-weight:700;flex:none}
 
-.home{display:flex;flex-direction:column;gap:20px;
-  padding:max(32px,env(safe-area-inset-top)) 20px calc(20px + env(safe-area-inset-bottom))}
-.hero{display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 0 4px;text-align:center}
-.logo{width:96px;height:96px;display:grid;place-items:center;font-size:48px;
-  background:var(--primary-c);border-radius:32px;animation:wobble 5s ease-in-out infinite}
-.hero h1{margin:8px 0 0;font-size:48px;font-weight:700;letter-spacing:-1px}
+.home{display:flex;flex-direction:column;gap:16px;overflow-y:auto;
+  padding:max(24px,env(safe-area-inset-top)) 20px calc(20px + env(safe-area-inset-bottom))}
+.hero{display:flex;flex-direction:column;align-items:center;gap:4px;padding:4px 0 0;text-align:center}
+.logo{width:80px;height:80px;display:grid;place-items:center;font-size:40px;
+  background:var(--primary-c);border-radius:28px;animation:wobble 5s ease-in-out infinite}
+.hero h1{margin:6px 0 0;font-size:40px;font-weight:700;letter-spacing:-1px}
 .hero p{margin:0;color:var(--on-surface-v)}
-.field{display:flex;gap:10px}
+.field{display:flex;gap:10px;flex:none}
 .field input{flex:1;min-width:0;height:60px;padding:0 22px;border-radius:30px;border:2px solid transparent;
   background:var(--surface-ch);outline:0;font-size:17px;
   transition:border-color .2s,border-radius .5s var(--spring)}
@@ -350,7 +405,23 @@ button{border:0;cursor:pointer;user-select:none}
   display:grid;place-items:center;transition:transform .5s var(--spring),border-radius .5s var(--spring),opacity .2s}
 .fab:active:not(:disabled){transform:scale(.85);border-radius:30px}
 .fab:disabled{opacity:.38}
-.chips{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;overflow:auto;flex:1}
+
+.goal{flex:none;display:flex;flex-direction:column;gap:10px;padding:12px 12px 12px 20px;
+  border-radius:28px;background:var(--surface-c)}
+.goal-row{display:flex;align-items:center;gap:8px}
+.goal-row>span{flex:1;font-weight:500;color:var(--on-surface-v)}
+.step{width:44px;height:44px;border-radius:16px;background:var(--primary-c);color:var(--on-primary-c);
+  display:grid;place-items:center;transition:transform .5s var(--spring),border-radius .5s var(--spring)}
+.step:active{transform:scale(.8);border-radius:22px;transition-duration:.1s}
+.goal-v{min-width:84px;text-align:center;font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;
+  animation:bump .35s var(--spring) both}
+.presets{display:flex;gap:8px;padding-right:8px}
+.preset{flex:1;height:36px;border-radius:18px;background:var(--surface-chh);font-weight:600;font-size:14px;
+  transition:transform .5s var(--spring),background .25s,color .25s}
+.preset:active{transform:scale(.9);transition-duration:.1s}
+.preset.on{background:var(--secondary-c);color:var(--on-secondary-c)}
+
+.chips{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;overflow:auto;flex:1;min-height:88px}
 .chip{display:flex;align-items:center;gap:12px;padding:8px 8px 8px 10px;border-radius:28px;
   background:var(--surface-ch);animation:pop .55s var(--spring) both}
 .chip.leave{animation:out .28s ease-in forwards}
@@ -359,7 +430,7 @@ button{border:0;cursor:pointer;user-select:none}
 .icon-btn{width:44px;height:44px;border-radius:50%;background:transparent;display:grid;place-items:center;
   color:var(--on-surface-v);transition:transform .5s var(--spring),background .2s}
 .icon-btn:active{transform:scale(.78);background:var(--surface-chh)}
-.start{height:64px;border-radius:32px;background:var(--primary);color:var(--on-primary);font-size:18px;
+.start{flex:none;height:64px;border-radius:32px;background:var(--primary);color:var(--on-primary);font-size:18px;
   font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;
   transition:transform .5s var(--spring),border-radius .5s var(--spring),background .3s}
 .start:active:not(:disabled){transform:scale(.95);border-radius:22px}
@@ -396,18 +467,33 @@ button{border:0;cursor:pointer;user-select:none}
 .who b{font-size:18px;font-weight:600}
 .who span{font-size:13px;color:var(--on-surface-v)}
 .pending{font-size:34px;font-weight:700;color:var(--primary);font-variant-numeric:tabular-nums;animation:bump .4s var(--spring) both}
+.pending.neg{color:var(--error)}
 .pending.zero{opacity:.35}
-.pad{flex:1;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(4,1fr);gap:8px;margin-top:4px;min-height:0}
+
+.seg{position:relative;flex:none;display:grid;grid-template-columns:1fr 1fr;height:44px;padding:4px;
+  border-radius:22px;background:var(--surface-chh);margin-bottom:8px}
+.seg .ind{position:absolute;top:4px;bottom:4px;left:4px;width:calc(50% - 4px);border-radius:18px;
+  background:var(--primary-c);transition:transform .6s var(--spring),background .3s}
+.seg.neg .ind{transform:translateX(100%);background:var(--error-c)}
+.seg button{position:relative;z-index:1;background:transparent;font-weight:600;font-size:15px;
+  display:flex;align-items:center;justify-content:center;gap:6px;color:var(--on-surface-v);
+  transition:color .3s,transform .5s var(--spring)}
+.seg button:active{transform:scale(.94)}
+.seg button.on{color:var(--on-primary-c)}
+.seg.neg button.on{color:var(--on-error-c)}
+
+.pad{flex:1;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(4,1fr);gap:8px;min-height:0}
 .key{border-radius:22px;background:var(--surface-chh);font-size:24px;font-weight:500;display:grid;place-items:center;
   transition:transform .5s var(--spring),border-radius .5s var(--spring),background .2s}
 .key:active{transform:scale(.9);border-radius:32px;transition-duration:.1s;background:var(--secondary-c)}
 .key.fn{background:var(--secondary-c);color:var(--on-secondary-c)}
 .actions{display:grid;grid-template-columns:1fr 1.3fr;gap:8px;margin-top:12px}
 .btn{height:60px;border-radius:30px;display:flex;align-items:center;justify-content:center;gap:8px;
-  font-size:17px;font-weight:600;transition:transform .5s var(--spring),border-radius .5s var(--spring),opacity .2s}
+  font-size:17px;font-weight:600;transition:transform .5s var(--spring),border-radius .5s var(--spring),opacity .2s,background .3s,color .3s}
 .btn:active:not(:disabled){transform:scale(.93);border-radius:20px}
 .btn.tonal{background:var(--tertiary-c);color:var(--on-tertiary-c)}
 .btn.filled{background:var(--primary);color:var(--on-primary)}
+.btn.filled.neg{background:var(--error);color:var(--on-error)}
 .btn.text{background:transparent;color:var(--primary)}
 .btn:disabled{opacity:.38;cursor:default}
 
