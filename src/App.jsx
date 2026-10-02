@@ -18,32 +18,35 @@ const save = (k, v) => {
   try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ }
 };
 
-/* ───────────── Haptics ───────────── */
+/* ───────────── Haptics ─────────────
+   Numbers are milliseconds: vibrate, pause, vibrate, ...
+   Most phone motors can't render pulses under ~15-20 ms, so keep them above that. */
 let HAPTICS = load("tutto:haptics", true);
 const buzz = (p) => {
   if (!HAPTICS) return;
   try { navigator.vibrate?.(p); } catch { /* ignore */ }
 };
 const H = {
-  key: 10,
-  key2: [10, 18, 10],
-  del: 7,
-  sign: [10, 28, 14],
-  add: [8, 22, 12, 22, 22],
-  sub: [26, 30, 9],
-  next: [12, 40, 20],
-  select: 14,
-  back: [10, 30, 10],
-  expand: 9,
-  collapse: 6,
-  snap: 12,
-  tick: 8,
-  swap: [8, 40, 8],
-  crown: [10, 30, 16, 30, 34],
-  win: [20, 50, 20, 50, 30, 50, 60, 70, 140],
-  remove: 18,
-  addP: [8, 28, 14],
-  start: [12, 40, 12, 40, 28],
+  on: [45, 50, 45],
+  key: 20,
+  key2: [20, 32, 20],
+  del: 14,
+  sign: [22, 36, 30],
+  add: [20, 30, 24, 30, 42],
+  sub: [48, 38, 18],
+  next: [26, 46, 38],
+  select: 26,
+  back: [22, 36, 22],
+  expand: 20,
+  collapse: 14,
+  snap: 24,
+  tick: 16,
+  swap: [20, 46, 20],
+  crown: [22, 38, 32, 38, 64],
+  win: [30, 60, 30, 60, 50, 60, 90, 70, 200],
+  remove: 34,
+  addP: [20, 34, 30],
+  start: [26, 46, 26, 46, 64],
 };
 
 const I = {
@@ -303,6 +306,9 @@ function Game({ initial, target, haptics, onHaptics, onHome, onRematch }) {
   const [winner, setWinner] = useState(null);
   const [done, setDone] = useState(false);
   const gest = useRef(null);
+  const body = useRef(null);
+  const swipe = useRef(null);
+  const swiped = useRef(false);
 
   const cur = players[turn];
   const subject = players.find((p) => p.id === sel) || cur;
@@ -361,6 +367,43 @@ function Game({ initial, target, haptics, onHaptics, onHome, onRematch }) {
       setInput("");
       setNeg(false);
     }
+  };
+
+  // swipe left / right on the panel to switch Add <-> Subtract
+  const sDown = (e) => {
+    swiped.current = false;
+    swipe.current = { x: e.clientX, y: e.clientY, t: performance.now(), on: false };
+  };
+  const sMove = (e) => {
+    const s = swipe.current;
+    if (!s) return;
+    const dx = e.clientX - s.x, dy = e.clientY - s.y;
+    if (!s.on) {
+      if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.2) s.on = true;
+      else return;
+    }
+    swiped.current = true;
+    const valid = (dx < 0 && !neg) || (dx > 0 && neg);
+    const k = valid ? 0.35 : 0.12;
+    body.current.style.transition = "none";
+    body.current.style.transform = `translateX(${Math.max(-48, Math.min(48, dx * k))}px)`;
+  };
+  const sEnd = (e, cancel) => {
+    const s = swipe.current;
+    swipe.current = null;
+    if (!s || !s.on) return;
+    body.current.style.transition = "";
+    body.current.style.transform = "";
+    if (cancel) return;
+    const dx = e.clientX - s.x;
+    const v = Math.abs(dx) / Math.max(1, performance.now() - s.t);
+    if (Math.abs(dx) > 56 || (v > 0.5 && Math.abs(dx) > 24)) {
+      if (dx < 0 && !neg) setSign(true);
+      else if (dx > 0 && neg) setSign(false);
+    }
+  };
+  const eatClick = (e) => {
+    if (swiped.current) { e.stopPropagation(); e.preventDefault(); swiped.current = false; }
   };
 
   // sheet drag
@@ -425,32 +468,37 @@ function Game({ initial, target, haptics, onHaptics, onHome, onRematch }) {
           </div>
         </div>
 
-        <div className={`seg ${neg ? "neg" : ""}`}>
-          <i className="ind" />
-          <button onClick={() => setSign(false)} className={!neg ? "on" : ""}><Icon d={I.add} size={18} /> Add</button>
-          <button onClick={() => setSign(true)} className={neg ? "on" : ""}><Icon d={I.rem} size={18} /> Subtract</button>
-        </div>
+        <div className="body" ref={body}
+          onPointerDown={sDown} onPointerMove={sMove}
+          onPointerUp={(e) => sEnd(e, false)} onPointerCancel={(e) => sEnd(e, true)}
+          onClickCapture={eatClick}>
+          <div className={`seg ${neg ? "neg" : ""}`}>
+            <i className="ind" />
+            <button onClick={() => setSign(false)} className={!neg ? "on" : ""}><Icon d={I.add} size={18} /> Add</button>
+            <button onClick={() => setSign(true)} className={neg ? "on" : ""}><Icon d={I.rem} size={18} /> Subtract</button>
+          </div>
 
-        <div className="pad">
-          {KEYS.map((k) => (
-            <button key={k} className={`key ${k === "del" ? "fn" : ""}`} onClick={() => press(k)}
-              aria-label={k === "del" ? "Delete" : k}>
-              {k === "del" ? <Icon d={I.del} /> : k}
-            </button>
-          ))}
-        </div>
+          <div className="pad">
+            {KEYS.map((k) => (
+              <button key={k} className={`key ${k === "del" ? "fn" : ""}`} onClick={() => press(k)}
+                aria-label={k === "del" ? "Delete" : k}>
+                {k === "del" ? <Icon d={I.del} /> : k}
+              </button>
+            ))}
+          </div>
 
-        <div className="actions">
-          {editing ? (
-            <button className="btn sec pop" key="back" onClick={backToTurn}>
-              <Icon d={I.undo} /> Back to turn
+          <div className="actions">
+            {editing ? (
+              <button className="btn sec pop" key="back" onClick={backToTurn}>
+                <Icon d={I.undo} /> Back to turn
+              </button>
+            ) : (
+              <button className="btn tonal" key="next" onClick={next}>Next <Icon d={I.next} /></button>
+            )}
+            <button className={`btn filled ${neg ? "neg" : ""}`} onClick={add} disabled={!value}>
+              <Icon d={neg ? I.rem : I.add} /> {neg ? "Subtract" : "Add"}
             </button>
-          ) : (
-            <button className="btn tonal" key="next" onClick={next}>Next <Icon d={I.next} /></button>
-          )}
-          <button className={`btn filled ${neg ? "neg" : ""}`} onClick={add} disabled={!value}>
-            <Icon d={neg ? I.rem : I.add} /> {neg ? "Subtract" : "Add"}
-          </button>
+          </div>
         </div>
       </section>
 
@@ -476,17 +524,27 @@ export default function App() {
   const [players, setPlayers] = useState(() => load("tutto:players", []));
   const [target, setTarget] = useState(() => load("tutto:target", DEFAULT_TARGET));
   const [haptics, setHaptics] = useState(HAPTICS);
+  const [toast, setToast] = useState(null);
   const [game, setGame] = useState(0); // 0 = home, otherwise remount key
+  const timer = useRef();
 
   useEffect(() => save("tutto:players", players), [players]);
   useEffect(() => save("tutto:target", target), [target]);
 
+  const say = (msg) => {
+    setToast({ msg, k: Math.random() });
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setToast(null), 2400);
+  };
   const toggleHaptics = () => {
     const n = !haptics;
     HAPTICS = n;
     save("tutto:haptics", n);
     setHaptics(n);
-    if (n) buzz(H.add);
+    if (!n) return say("Haptics off");
+    let ok = false;
+    try { ok = typeof navigator.vibrate === "function" && navigator.vibrate(H.on); } catch { /* ignore */ }
+    say(ok ? "Haptics on" : "This browser can't vibrate");
   };
 
   return (
@@ -499,6 +557,9 @@ export default function App() {
         ) : (
           <Game key={game} initial={players} target={target} haptics={haptics} onHaptics={toggleHaptics}
             onHome={() => setGame(0)} onRematch={() => setGame((g) => g + 1)} />
+        )}
+        {toast && (
+          <div className="toast-wrap"><div className="toast" key={toast.k}>{toast.msg}</div></div>
         )}
       </div>
     </>
@@ -514,6 +575,7 @@ const CSS = `
   --error:#B3261E;--on-error:#fff;--error-c:#F9DEDC;--on-error-c:#410E0B;
   --surface:#FEF7FF;--surface-c:#F3EDF7;--surface-ch:#ECE6F0;--surface-chh:#E6E0E9;
   --on-surface:#1D1B20;--on-surface-v:#49454F;--outline-v:#CAC4D0;
+  --inv:#322F35;--on-inv:#F5EFF7;
   --spring:cubic-bezier(.34,1.56,.64,1);
 }
 @media (prefers-color-scheme:dark){:root{
@@ -523,14 +585,16 @@ const CSS = `
   --error:#F2B8B5;--on-error:#601410;--error-c:#8C1D18;--on-error-c:#F9DEDC;
   --surface:#141218;--surface-c:#211F26;--surface-ch:#2B2930;--surface-chh:#36343B;
   --on-surface:#E6E0E9;--on-surface-v:#CAC4D0;--outline-v:#49454F;
+  --inv:#E6E0E9;--on-inv:#322F35;
 }}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body,#root{height:100%;margin:0}
+html,body{overflow:hidden;overscroll-behavior:none}
 body{background:var(--surface-c);color:var(--on-surface);-webkit-font-smoothing:antialiased;
-  font-family:"Google Sans Flex","Roboto Flex",Roboto,system-ui,sans-serif;overscroll-behavior:none}
+  font-family:"Google Sans Flex","Roboto Flex",Roboto,system-ui,sans-serif}
 button,input{font:inherit;color:inherit}
 button{border:0;cursor:pointer;user-select:none}
-.app{height:100dvh;max-width:480px;margin:0 auto;position:relative;overflow:hidden;background:var(--surface)}
+.app{position:fixed;inset:0;max-width:480px;margin:0 auto;overflow:hidden;background:var(--surface)}
 .screen{position:absolute;inset:0;animation:rise .7s var(--spring) both}
 @keyframes rise{from{transform:translateY(40px) scale(.96);opacity:0}}
 @keyframes pop{from{transform:scale(.5);opacity:0}}
@@ -543,6 +607,11 @@ button{border:0;cursor:pointer;user-select:none}
 .tag{font-style:normal;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;flex:none;
   background:var(--primary);color:var(--on-primary);animation:pop .5s var(--spring) both}
 .tag.ed{background:var(--tertiary);color:var(--on-tertiary)}
+
+.toast-wrap{position:absolute;left:0;right:0;top:max(14px,env(safe-area-inset-top));display:grid;
+  place-items:center;z-index:30;pointer-events:none}
+.toast{padding:12px 20px;border-radius:20px;background:var(--inv);color:var(--on-inv);font-size:15px;
+  font-weight:500;box-shadow:0 6px 20px rgb(0 0 0/.25);animation:pop .5s var(--spring) both}
 
 .home{display:flex;flex-direction:column;gap:16px;overflow-y:auto;
   padding:max(24px,env(safe-area-inset-top)) 20px calc(20px + env(safe-area-inset-bottom))}
@@ -654,6 +723,8 @@ button{border:0;cursor:pointer;user-select:none}
 .pending.neg{color:var(--error)}
 .pending.zero{opacity:.35}
 
+.body{flex:1;min-height:0;display:flex;flex-direction:column;touch-action:pan-y;
+  transition:transform .6s var(--spring)}
 .seg{position:relative;flex:none;display:grid;grid-template-columns:1fr 1fr;height:44px;padding:4px;
   border-radius:22px;background:var(--surface-chh);margin-bottom:8px}
 .seg .ind{position:absolute;top:4px;bottom:4px;left:4px;width:calc(50% - 4px);border-radius:18px;
@@ -671,7 +742,7 @@ button{border:0;cursor:pointer;user-select:none}
   transition:transform .5s var(--spring),border-radius .5s var(--spring),background .2s}
 .key:active{transform:scale(.9);border-radius:32px;transition-duration:.1s;background:var(--secondary-c)}
 .key.fn{background:var(--secondary-c);color:var(--on-secondary-c)}
-.actions{display:grid;grid-template-columns:1fr 1.3fr;gap:8px;margin-top:12px}
+.actions{display:grid;grid-template-columns:1fr 1.3fr;gap:8px;margin-top:12px;flex:none}
 .btn{height:60px;border-radius:30px;display:flex;align-items:center;justify-content:center;gap:8px;
   font-size:17px;font-weight:600;transition:transform .5s var(--spring),border-radius .5s var(--spring),opacity .2s,background .3s,color .3s}
 .btn:active:not(:disabled){transform:scale(.93);border-radius:20px}
